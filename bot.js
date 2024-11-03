@@ -422,3 +422,125 @@ bot.onText(/\/leaderboard/, async (msg) => {
         console.error("Error with leaderboard prices:", error);
     }
 });
+
+
+// callback 
+bot.on("callback_query", (callbackQuery) => {
+    const chatId = callbackQuery.message.chat.id;
+    const data = callbackQuery.data;
+
+    switch (data) {
+        case 'portfolio':
+            // Fetch and display portfolio
+            db.query('SELECT balance FROM users WHERE telegram_id = ?', [chatId], (err, results) => {
+                if (err) {
+                    bot.sendMessage(chatId, "An error occurred while fetching your balance.");
+                    console.error(err);
+                    return;
+                }
+
+                if (results.length > 0) {
+                    const balance = results[0].balance;
+                    let portfolioMessage = `Your current balance is $${balance.toFixed(2)}\n\nPortfolio:\n`;
+
+                    db.query('SELECT crypto_symbol, quantity FROM portfolios WHERE user_id = (SELECT user_id FROM users WHERE telegram_id = ?)', [chatId], (err, portfolio) => {
+                        if (err) {
+                            bot.sendMessage(chatId, "An error occurred while accessing your portfolio.");
+                            console.error(err);
+                            return;
+                        }
+
+                        portfolio.forEach(asset => {
+                            portfolioMessage += `${asset.crypto_symbol}: ${asset.quantity.toFixed(6)}\n`;
+                        });
+
+                        bot.sendMessage(chatId, portfolioMessage);
+                    });
+                } else {
+                    bot.sendMessage(chatId, "Please use /start to register first.");
+                }
+            });
+            break;
+
+        case 'buy':
+            bot.sendMessage(chatId, "To buy cryptocurrency, use the command: `/buy <symbol> <amount>`\nExample: `/buy BTC 1000`", { parse_mode: 'Markdown' });
+            break;
+
+        case 'sell':
+            bot.sendMessage(chatId, "To sell cryptocurrency, use the command: `/sell <symbol> <amount>`\nExample: `/sell BTC 500`", { parse_mode: 'Markdown' });
+            break;
+
+        case 'history':
+            // Fetch and display transaction history
+            db.query('SELECT user_id FROM users WHERE telegram_id = ?', [chatId], (err, userResults) => {
+                if (err || userResults.length === 0) {
+                    bot.sendMessage(chatId, "Please register first with /start.");
+                    return;
+                }
+
+                const userId = userResults[0].user_id;
+
+                db.query('SELECT crypto_symbol, quantity, amount, transaction_type, transaction_date FROM transactions WHERE user_id = ? ORDER BY transaction_date DESC LIMIT 10', [userId], (err, transactions) => {
+                    if (err) {
+                        bot.sendMessage(chatId, "An error occurred while fetching your transaction history.");
+                        console.error("Error fetching history:", err);
+                        return;
+                    }
+
+                    if (transactions.length === 0) {
+                        bot.sendMessage(chatId, "No transactions found in your history.");
+                        return;
+                    }
+
+                    let historyMessage = "Your Last 10 Transactions:\n\n";
+                    transactions.forEach(tx => {
+                        historyMessage += `${tx.transaction_type} ${tx.crypto_symbol}: ${tx.quantity.toFixed(6)} for $${tx.amount.toFixed(2)} on ${new Date(tx.transaction_date).toLocaleString()}\n`;
+                    });
+
+                    bot.sendMessage(chatId, historyMessage);
+                });
+            });
+            break;
+
+        case 'leaderboard':
+            // Fetch and display leaderboard
+            const prices = {
+                BTC: 50000, // Use your real-time prices if available
+                ETH: 3000,
+                XRP: 1
+            };
+
+            db.query(`
+                SELECT u.username, u.balance +
+                SUM(IF(p.crypto_symbol = 'BTC', p.quantity * ?, 
+                       IF(p.crypto_symbol = 'ETH', p.quantity * ?, 
+                       IF(p.crypto_symbol = 'XRP', p.quantity * ?, 0)))) AS portfolio_value
+                FROM users u
+                LEFT JOIN portfolios p ON u.user_id = p.user_id
+                GROUP BY u.user_id
+                ORDER BY portfolio_value DESC
+                LIMIT 10`, [prices.BTC, prices.ETH, prices.XRP], (err, results) => {
+
+                if (err) {
+                    console.error("Error fetching leaderboard:", err);
+                    bot.sendMessage(chatId, "An error occurred while fetching the leaderboard.");
+                    return;
+                }
+
+                let leaderboardMessage = "🏆 Top 10 Users by Portfolio Value:\n\n";
+                results.forEach((user, index) => {
+                    leaderboardMessage += `${index + 1}. ${user.username}: $${user.portfolio_value.toFixed(2)}\n`;
+                });
+
+                bot.sendMessage(chatId, leaderboardMessage);
+            });
+            break;
+
+        default:
+            bot.sendMessage(chatId, "Unknown command.");
+            break;
+    }
+
+    // Notify Telegram that the callback was processed
+    bot.answerCallbackQuery(callbackQuery.id);
+});
